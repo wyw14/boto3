@@ -24,6 +24,46 @@ class ResourceLoadException(Boto3Error):
     pass
 
 
+class UnknownResourceActionError(Boto3Error):
+    """Raised when an offline request preview is requested for an
+    action which is not defined on the resource's model."""
+
+    def __init__(self, resource_name, action_name, available_actions):
+        available = ', '.join(available_actions) or '(none)'
+        msg = (
+            f"Resource '{resource_name}' has no model-defined action "
+            f"named '{action_name}'. Available model-defined actions "
+            f"are: {available}."
+        )
+        super().__init__(msg)
+        self.resource_name = resource_name
+        self.action_name = action_name
+        self.available_actions = list(available_actions)
+
+
+class UnsupportedResourceActionError(Boto3Error):
+    """Raised when an offline request preview is requested for a
+    callable which was not generated from the resource JSON model,
+    e.g. a custom-injected method, waiter, collection, subresource
+    factory or reference property."""
+
+    def __init__(
+        self, resource_name, action_name, description, available_actions
+    ):
+        available = ', '.join(available_actions) or '(none)'
+        msg = (
+            f"Cannot build an offline request preview for '{action_name}' "
+            f"on '{resource_name}': {description}. The preview only supports "
+            f"actions generated from the resource model, which are: "
+            f"{available}."
+        )
+        super().__init__(msg)
+        self.resource_name = resource_name
+        self.action_name = action_name
+        self.description = description
+        self.available_actions = list(available_actions)
+
+
 # NOTE: This doesn't appear to be used anywhere.
 # It's probably safe to remove this.
 class NoVersionFound(Boto3Error):
