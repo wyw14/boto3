@@ -117,6 +117,29 @@ class DynamoDBNeedsKeyConditionError(Boto3Error):
     pass
 
 
+class DynamoDBBatchWriterByteBudgetExceededError(Boto3Error):
+    """Raised when a single buffered write request already exceeds the
+    configured ``request_byte_budget``.
+
+    The request is never sent to DynamoDB nor silently dropped; it remains
+    the caller's responsibility to use a larger budget or a smaller request.
+    """
+
+    def __init__(self, table_name, request_size, byte_budget):
+        msg = (
+            f"A single WriteRequest for table {table_name!r} serializes to "
+            f"{request_size} uncompressed JSON UTF-8 bytes, which exceeds the "
+            f"configured request_byte_budget of {byte_budget} bytes for the "
+            f"batch_write_item RequestItems payload (including the table name "
+            f"and JSON structure overhead). Increase request_byte_budget or "
+            f"reduce the size of the request."
+        )
+        super().__init__(msg)
+        self.table_name = table_name
+        self.request_size = request_size
+        self.byte_budget = byte_budget
+
+
 class PythonDeprecationWarning(Warning):
     """
     Python version being used is scheduled to become unsupported

@@ -15,6 +15,7 @@ import json
 from botocore.stub import Stubber
 
 import boto3
+from boto3.exceptions import DynamoDBBatchWriterByteBudgetExceededError
 from tests import unittest
 
 
@@ -113,3 +114,78 @@ class TestTableResourceCustomizations(unittest.TestCase):
         }
 
         assert late_stubber.intercepted_request_body == expected_request_body
+
+    def test_byte_budget_matches_actual_wire_body(self):
+        client = self.table.meta.client
+        intercepted_bodies = []
+
+        def intercept(event_name, params, **kwargs):
+            intercepted_bodies.append(params.get('body', b''))
+
+        client.meta.events.register_first('before-call.*.*', intercept)
+
+        def request_items_byte_size(body):
+            parsed = json.loads(body.decode('utf-8'))
+            return len(json.dumps(parsed['RequestItems']).encode('utf-8'))
+
+        # Calibrate the budget against the body the client actually sends
+        # for one request, including multi-byte content and all structure
+        # overhead. The table name is part of RequestItems.
+        items = [{'Hash': f'你好{x}'} for x in ('a', 'b', 'c')]
+        with Stubber(client) as stubber:
+            stubber.add_response(
+                'batch_write_item',
+                service_response={'UnprocessedItems': {}},
+            )
+            with self.table.batch_writer(
+                request_byte_budget=10_000_000
+            ) as batch:
+                batch.put_item(Item=dict(items[0]))
+            stubber.assert_no_pending_responses()
+
+        self.assertEqual(len(intercepted_bodies), 1)
+        solo_size = request_items_byte_size(intercepted_bodies[-1])
+        full_body_size = len(intercepted_bodies[-1])
+        # Measuring RequestItems must include the table/JSON overhead rather
+        # than just the item content, while excluding the top level wrapper.
+        self.assertGreater(solo_size, len(json.dumps(items[0])))
+        self.assertLess(solo_size, full_body_size)
+
+        # All three items serialize to the same length. A budget of exactly
+        # one item's size must split them into three requests and each real
+        # request body must stay within (and exactly hit) that budget.
+        calls_before = len(intercepted_bodies)
+        with Stubber(client) as stubber:
+            for _ in items:
+                stubber.add_response(
+                    'batch_write_item',
+                    service_response={'UnprocessedItems': {}},
+                )
+            with self.table.batch_writer(
+                request_byte_budget=solo_size
+            ) as batch:
+                for item in items:
+                    batch.put_item(Item=dict(item))
+            stubber.assert_no_pending_responses()
+
+        split_bodies = intercepted_bodies[calls_before:]
+        self.assertEqual(len(split_bodies), 3)
+        for body, item in zip(split_bodies, items):
+            self.assertEqual(request_items_byte_size(body), solo_size)
+            parsed = json.loads(body.decode('utf-8'))
+            self.assertEqual(
+                parsed['RequestItems']['mytable'],
+                [{'PutRequest': {'Item': {'Hash': {'S': item['Hash']}}}}],
+            )
+
+        # A single item larger than the budget is rejected before anything
+        # is sent over the wire.
+        calls_before = len(intercepted_bodies)
+        with Stubber(client):
+            batch = self.table.batch_writer(request_byte_budget=solo_size - 1)
+            with self.assertRaises(
+                DynamoDBBatchWriterByteBudgetExceededError
+            ) as ctx:
+                batch.put_item(Item=dict(items[0]))
+            self.assertEqual(ctx.exception.request_size, solo_size)
+        self.assertEqual(len(intercepted_bodies), calls_before)

@@ -47,7 +47,7 @@ class TestDynamoDBCustomizations(BaseDocsFunctionalTests):
         self.assert_contains_lines_in_order(
             [
                 '************\nbatch_writer\n************',
-                '.. py:method:: DynamoDB.Table.batch_writer(overwrite_by_pkeys=None)',
+                '.. py:method:: DynamoDB.Table.batch_writer(overwrite_by_pkeys=None, request_byte_budget=None)',
             ],
             self.get_nested_file_contents('dynamodb', 'table', 'batch_writer'),
         )
